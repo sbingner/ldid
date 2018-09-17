@@ -1,3 +1,5 @@
+DESTDIR ?= /usr/local
+
 .PHONY: all clean
 LDID_OBJS = ldid.cpp.o sha224-256.c.o sha1.c.o lookup2.c.o
 
@@ -22,5 +24,5 @@ clean:
 	rm -f $(LDID_OBJS) ldid ldid2 ldid3
 
 install: all
-	mkdir -p $(DESTDIR)/usr/bin
-	cp ldid ldid2 ldid3 $(DESTDIR)/usr/bin
+	mkdir -p $(DESTDIR)/bin
+	cp ldid ldid2 ldid3 $(DESTDIR)/bin
