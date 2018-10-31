@@ -797,6 +797,8 @@ int main(int argc, const char *argv[]) {
 	// Default to SHA1 signing
 	bool do_sha1 = true;
 	bool do_sha2 = false;
+	bool do_platform = false;
+	bool do_adhoc = false;
 
 	union {
 		uint16_t word;
@@ -869,14 +871,22 @@ int main(int argc, const char *argv[]) {
 
 			case 't': flag_t = true; break;
 			case 'u': flag_u = true; break;
-			case 'p': flag_p = true; break;
 			case 'e': flag_e = true; break;
 			case 'O': flag_O = true; break;
 
 			case 'D': flag_D = true; break;
 			case 'd': flag_d = true; break;
 
-			case 'a': flag_a = true; break;
+			case 'a': 
+								if (strcmp(argv[argi], "-adhoc") == 0)
+								{
+									do_adhoc = true;
+									printf("setting adhoc...\n");
+									break;
+								}
+
+								flag_a = true; 
+								break;
 
 			case 'A':
 								flag_A = true;
@@ -892,6 +902,16 @@ int main(int argc, const char *argv[]) {
 								}
 								break;
 
+			case 'p': 
+								if (strcmp(argv[argi], "-platform") == 0)
+								{
+									do_platform = true;
+									printf("setting platform...\n");
+									break;
+								}
+								
+								flag_p = true; break;
+			
 			case 's':
 								_assert(!flag_S);
 								flag_s = true;
@@ -1363,13 +1383,13 @@ int main(int argc, const char *argv[]) {
 
 					sha1directory->blob.magic = Swap(CSMAGIC_CODEDIRECTORY);
 					sha1directory->version = Swap(uint32_t(0x00020001));
-					sha1directory->flags = Swap(uint32_t(0));
+					sha1directory->flags = do_adhoc ? Swap(uint32_t(0x2)) : 0;
 					sha1directory->codeLimit = Swap(data);
 					sha1directory->hashSize = CS_SHA1_LEN;
 					sha1directory->hashType = CS_HASHTYPE_SHA1;
-					sha1directory->spare1 = 0x00;
+					sha1directory->spare1 = do_platform;
 					sha1directory->pageSize = 0x0c;
-					sha1directory->spare2 = Swap(uint32_t(0));
+					sha1directory->spare2 = Swap(uint32_t(1));
 
 					sha1directory->identOffset = Swap(offset - begin);
 					strcpy(reinterpret_cast<char *>(blob + offset), name);
@@ -1408,13 +1428,13 @@ int main(int argc, const char *argv[]) {
 
 					sha256directory->blob.magic = Swap(CSMAGIC_CODEDIRECTORY);
 					sha256directory->version = Swap(uint32_t(0x00020001));
-					sha256directory->flags = Swap(uint32_t(0));
+					sha256directory->flags = do_adhoc ? Swap(uint32_t(0x2)) : 0;
 					sha256directory->codeLimit = Swap(data);
 					sha256directory->hashSize = CS_SHA256_LEN;
 					sha256directory->hashType = CS_HASHTYPE_SHA256;
-					sha256directory->spare1 = 0x00;
+					sha256directory->spare1 = do_platform;
 					sha256directory->pageSize = 0x0c;
-					sha256directory->spare2 = Swap(uint32_t(0));
+					sha256directory->spare2 = Swap(uint32_t(1));
 
 					sha256directory->identOffset = Swap(offset - begin);
 					strcpy(reinterpret_cast<char *>(blob + offset), name);
