@@ -881,7 +881,6 @@ int main(int argc, const char *argv[]) {
 								if (strcmp(argv[argi], "-adhoc") == 0)
 								{
 									do_adhoc = true;
-									printf("setting adhoc...\n");
 									break;
 								}
 
@@ -906,7 +905,6 @@ int main(int argc, const char *argv[]) {
 								if (strcmp(argv[argi], "-platform") == 0)
 								{
 									do_platform = true;
-									printf("setting platform...\n");
 									break;
 								}
 								
