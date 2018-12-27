@@ -527,6 +527,9 @@ Type_ Align(Type_ value, size_t align) {
 static const uint8_t PageShift_(0x0c);
 static const uint32_t PageSize_(1 << PageShift_);
 
+static bool do_sha1(true);
+static bool do_sha2(true);
+
 static inline uint16_t Swap_(uint16_t value) {
     return
         ((value >>  8) & 0x00ff) |
@@ -940,12 +943,29 @@ static const std::vector<Algorithm *> &GetAlgorithms() {
     static AlgorithmSHA1 sha1;
     static AlgorithmSHA256 sha256;
 
-    static Algorithm *array[] = {
+    static Algorithm *array1[] = {
+        &sha1,
+    };
+
+    static Algorithm *array2[] = {
+        &sha256,
+    };
+
+    static Algorithm *array3[] = {
         &sha1,
         &sha256,
     };
 
-    static std::vector<Algorithm *> algorithms(array, array + sizeof(array) / sizeof(array[0]));
+    static std::vector<Algorithm *> algorithms;
+
+    if (do_sha1 && do_sha2) {
+        algorithms = std::vector<Algorithm *>(array3, array3 + sizeof(array3) / sizeof(array3[0]));
+    } else if (do_sha1) {
+        algorithms = std::vector<Algorithm *>(array1, array1 + sizeof(array1) / sizeof(array1[0]));
+    } else {
+        algorithms = std::vector<Algorithm *>(array2, array2 + sizeof(array2) / sizeof(array2[0]));
+    }
+
     return algorithms;
 }
 
@@ -2459,6 +2479,8 @@ int main(int argc, char *argv[]) {
     bool flag_e(false);
     bool flag_q(false);
 
+    bool flag_H(false);
+
 #ifndef LDID_NOFLAGT
     bool flag_T(false);
 #endif
@@ -2491,12 +2513,24 @@ int main(int argc, char *argv[]) {
     std::vector<std::string> files;
 
     if (argc == 1) {
-        fprintf(stderr, "usage: %s -S[entitlements.xml] <binary>\n", argv[0]);
+        fprintf(stderr, "usage: %s [-Hsha1] [-Hsha256] -S[entitlements.xml] <binary>\n", argv[0]);
         fprintf(stderr, "   %s -e MobileSafari\n", argv[0]);
         fprintf(stderr, "   %s -S cat\n", argv[0]);
         fprintf(stderr, "   %s -Stfp.xml gdb\n", argv[0]);
         exit(0);
     }
+
+    // Support setting default based on the ldid binary's name
+    if (strstr(argv[0], "ldid1")) {
+        do_sha1 = true;
+        do_sha2 = false;
+    } else if (strstr(argv[0], "ldid2")) {
+        do_sha1 = false;
+        do_sha2 = true;
+    } else if (strstr(argv[0], "ldid3")) {
+        do_sha1 = do_sha2 = true;
+    }
+
 
     for (int argi(1); argi != argc; ++argi)
         if (argv[argi][0] != '-')
@@ -2569,6 +2603,21 @@ int main(int argc, char *argv[]) {
                 if (argv[argi][2] != '\0')
                     key.open(argv[argi] + 2, O_RDONLY, PROT_READ, MAP_PRIVATE);
             break;
+
+            case 'H':
+	    	if (!flag_H) {
+		    do_sha1 = do_sha2 = false;
+		}
+		flag_H = true;
+		if (strcmp(argv[argi], "-Hsha1") == 0) {
+		    do_sha1 = true;
+		} else if (strcmp(argv[argi], "-Hsha256") == 0) {
+		    do_sha2 = true;
+		} else {
+		    fprintf(stderr, "Error: -H requires sha1 or sha256 argument\n");
+		    _assert(false);
+		}
+	    break;
 
 #ifndef LDID_NOFLAGT
             case 'T': {
