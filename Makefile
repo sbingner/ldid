@@ -2,8 +2,8 @@ DESTDIR ?= /
 PREFIX  ?= /usr/local
 OPENSSL_LDFLAGS := $(shell pkg-config --libs-only-L openssl)
 OPENSSL_CFLAGS  := $(shell pkg-config --cflags openssl)
-PLIST_LDFLAGS := $(shell pkg-config --libs libplist-2.0)
-PLIST_CFLAGS  := $(shell pkg-config --cflags libplist-2.0)
+PLIST_LDFLAGS := $(shell pkg-config --libs libplist)
+PLIST_CFLAGS  := $(shell pkg-config --cflags libplist)
 CFLAGS += $(OPENSSL_CFLAGS) $(PLIST_CFLAGS) -O2
 LDFLAGS ?= $(LDID_LIBS) $(OPENSSL_LDFLAGS) $(PLIST_LDFLAGS)
 
