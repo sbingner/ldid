@@ -2492,7 +2492,7 @@ static Hash Sign(const uint8_t *prefix, size_t size, std::streambuf &buffer, Has
     return Sign(data.data(), data.size(), proxy, identifier, entitlements, merge, requirements, key, slots, flags, platform, progress);
 }
 
-Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std::map<std::string, Hash> &remote, const std::string &requirements, const Functor<std::string (const std::string &, const std::string &)> &alter, const Progress &progress) {
+Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std::map<std::string, Hash> &remote, std::map<std::string, std::string> &remoteLinks, const std::string &requirements, const Functor<std::string (const std::string &, const std::string &)> &alter, const Progress &progress) {
     std::string executable;
     std::string identifier;
 
@@ -2564,6 +2564,7 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
     }
 
     std::map<std::string, Hash> local;
+    std::map<std::string, std::string> links;
 
     std::string failure(mac ? "Contents/|Versions/[^/]*/Resources/" : "");
     Expression nested("^(Frameworks/[^/]*\\.framework|PlugIns/[^/]*\\.appex(()|/[^/]*.app))/(" + failure + ")Info\\.plist$");
@@ -2576,7 +2577,7 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
         bundle.resize(bundle.size() - resources.size());
         SubFolder subfolder(folder, bundle);
 
-        bundles[nested[1]] = Sign(bundle, subfolder, key, local, "", Starts(name, "PlugIns/") ? alter :
+        bundles[nested[1]] = Sign(bundle, subfolder, key, local, links, "", Starts(name, "PlugIns/") ? alter :
             static_cast<const Functor<std::string (const std::string &, const std::string &)> &>(fun([&](const std::string &, const std::string &) -> std::string { return entitlements; }))
         , progress);
     }), fun([&](const std::string &name, const Functor<std::string ()> &read) {
@@ -2597,8 +2598,6 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
 
         return false;
     });
-
-    std::map<std::string, std::string> links;
 
     folder.Find("", fun([&](const std::string &name) {
         if (exclude(name))
@@ -2769,12 +2768,16 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
     for (const auto &entry : local)
         remote[root + entry.first] = entry.second;
 
+    for (const auto &entry : links)
+        remoteLinks[root + entry.first] = entry.second;
+
     return bundle;
 }
 
 Bundle Sign(const std::string &root, Folder &folder, const std::string &key, const std::string &requirements, const Functor<std::string (const std::string &, const std::string &)> &alter, const Progress &progress) {
     std::map<std::string, Hash> local;
-    return Sign(root, folder, key, local, requirements, alter, progress);
+    std::map<std::string, std::string> localLinks;
+    return Sign(root, folder, key, local, localLinks, requirements, alter, progress);
 }
 #endif
 
