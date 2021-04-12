@@ -861,6 +861,26 @@ class FatHeader :
 #define CS_HASHTYPE_SHA256_160 3
 #define CS_HASHTYPE_SHA386_386 4
 
+#if 0
+#define CS_EXECSEG_MAIN_BINARY     0x001 /* executable segment denotes main binary */
+#define CS_EXECSEG_ALLOW_UNSIGNED  0x010 /* allow unsigned pages (for debugging) */
+#define CS_EXECSEG_DEBUGGER        0x020 /* main binary is debugger */
+#define CS_EXECSEG_JIT             0x040 /* JIT enabled */
+#define CS_EXECSEG_SKIP_LV         0x080 /* skip library validation */
+#define CS_EXECSEG_CAN_LOAD_CDHASH 0x100 /* can bless cdhash for execution */
+#define CS_EXECSEG_CAN_EXEC_CDHASH 0x200 /* can execute blessed cdhash */
+#else
+enum SecCodeExecSegFlags {
+    kSecCodeExecSegMainBinary = 0x001,
+    kSecCodeExecSegAllowUnsigned = 0x010,
+    kSecCodeExecSegDebugger = 0x020,
+    kSecCodeExecSegJit = 0x040,
+    kSecCodeExecSegSkipLibraryVal = 0x080,
+    kSecCodeExecSegCanLoadCdHash = 0x100,
+    kSecCodeExecSegCanExecCdHash = 0x100,
+};
+#endif
+
 struct BlobIndex {
     uint32_t type;
     uint32_t offset;
@@ -897,6 +917,17 @@ struct CodeDirectory {
     uint64_t execSegBase;
     uint64_t execSegLimit;
     uint64_t execSegFlags;
+#if 0 // version = 0x20500
+    uint32_t runtime;
+    uint32_t preEncryptOffset;
+#endif
+#if 0 // version = 0x20600
+    uint8_t linkageHashType;
+    uint8_t linkageTruncated;
+    uint16_t spare4;
+    uint32_t linkageOffset;
+    uint32_t linkageSize;
+#endif
 } _packed;
 
 enum CodeSignatureFlags {
@@ -908,6 +939,7 @@ enum CodeSignatureFlags {
     kSecCodeSignatureRestrict = 0x0800,
     kSecCodeSignatureEnforcement = 0x1000,
     kSecCodeSignatureLibraryValidation = 0x2000,
+    kSecCodeSignatureRuntime = 0x10000,
 };
 
 enum Kind : uint32_t {
@@ -1064,9 +1096,9 @@ struct Baton {
 
 struct CodesignAllocation {
     FatMachHeader mach_header_;
-    uint32_t offset_;
+    uint64_t offset_;
     uint32_t size_;
-    uint32_t limit_;
+    uint64_t limit_;
     uint32_t alloc_;
     uint32_t align_;
     const char *arch_;
@@ -1225,7 +1257,7 @@ std::string Analyze(const void *data, size_t size) {
     return entitlements;
 }
 
-static void Allocate(const void *idata, size_t isize, std::streambuf &output, const Functor<size_t (const MachHeader &, Baton &, size_t)> &allocate, const Functor<size_t (const MachHeader &, const Baton &, std::streambuf &output, size_t, const std::string &, const char *, const Progress &)> &save, const Progress &progress) {
+static void Allocate(const void *idata, size_t isize, std::streambuf &output, const Functor<size_t (const MachHeader &, Baton &, size_t)> &allocate, const Functor<size_t (const MachHeader &, const Baton &, std::streambuf &output, size_t, size_t, size_t, const std::string &, const char *, const Progress &)> &save, const Progress &progress) {
     FatHeader source(const_cast<void *>(idata), isize);
 
     size_t offset(0);
@@ -1329,14 +1361,27 @@ static void Allocate(const void *idata, size_t isize, std::streambuf &output, co
         put(output, &fat_header, sizeof(fat_header));
         position += sizeof(fat_header);
 
+        // XXX: support fat_arch_64 (not in my toolchain)
+        // probably use C++14 generic lambda (not in my toolchain)
+
+        _assert_(![&]() {
+            _foreach (allocation, allocations) {
+                const auto offset(allocation.offset_);
+                const auto size(allocation.limit_ + allocation.alloc_);
+                if (uint32_t(offset) != offset || uint32_t(size) != size)
+                    return true;
+            }
+            return false;
+        }(), "FAT slice >=4GiB not currently supported");
+
         _foreach (allocation, allocations) {
             auto &mach_header(allocation.mach_header_);
 
             fat_arch fat_arch;
             fat_arch.cputype = Swap(mach_header->cputype);
             fat_arch.cpusubtype = Swap(mach_header->cpusubtype);
-            fat_arch.offset = Swap(allocation.offset_);
-            fat_arch.size = Swap(allocation.limit_ + allocation.alloc_);
+            fat_arch.offset = Swap(uint32_t(allocation.offset_));
+            fat_arch.size = Swap(uint32_t(allocation.limit_ + allocation.alloc_));
             fat_arch.align = Swap(allocation.align_);
             put(output, &fat_arch, sizeof(fat_arch));
             position += sizeof(fat_arch);
@@ -1350,6 +1395,9 @@ static void Allocate(const void *idata, size_t isize, std::streambuf &output, co
         pad(output, allocation.offset_ - position);
         position = allocation.offset_;
 
+        size_t left(-1);
+        size_t right(0);
+
         std::vector<std::string> commands;
 
         _foreach (load_command, mach_header.GetLoadCommands()) {
@@ -1360,22 +1408,44 @@ static void Allocate(const void *idata, size_t isize, std::streambuf &output, co
                     continue;
                 break;
 
+                // XXX: this is getting ridiculous: provide a better abstraction
+
                 case LC_SEGMENT: {
                     auto segment_command(reinterpret_cast<struct segment_command *>(&copy[0]));
-                    if (strncmp(segment_command->segname, "__LINKEDIT", 16) != 0)
-                        break;
-                    size_t size(mach_header.Swap(allocation.limit_ + allocation.alloc_ - mach_header.Swap(segment_command->fileoff)));
-                    segment_command->filesize = size;
-                    segment_command->vmsize = Align(size, 1 << allocation.align_);
+
+                    if ((segment_command->initprot & 04) != 0) {
+                        auto begin(mach_header.Swap(segment_command->fileoff));
+                        auto end(begin + mach_header.Swap(segment_command->filesize));
+                        if (left > begin)
+                            left = begin;
+                        if (right < end)
+                            right = end;
+                    }
+
+                    if (strncmp(segment_command->segname, "__LINKEDIT", 16) == 0) {
+                        size_t size(mach_header.Swap(allocation.limit_ + allocation.alloc_ - mach_header.Swap(segment_command->fileoff)));
+                        segment_command->filesize = size;
+                        segment_command->vmsize = Align(size, 1 << allocation.align_);
+                    }
                 } break;
 
                 case LC_SEGMENT_64: {
                     auto segment_command(reinterpret_cast<struct segment_command_64 *>(&copy[0]));
-                    if (strncmp(segment_command->segname, "__LINKEDIT", 16) != 0)
-                        break;
-                    size_t size(mach_header.Swap(allocation.limit_ + allocation.alloc_ - mach_header.Swap(segment_command->fileoff)));
-                    segment_command->filesize = size;
-                    segment_command->vmsize = Align(size, 1 << allocation.align_);
+
+                    if ((segment_command->initprot & 04) != 0) {
+                        auto begin(mach_header.Swap(segment_command->fileoff));
+                        auto end(begin + mach_header.Swap(segment_command->filesize));
+                        if (left > begin)
+                            left = begin;
+                        if (right < end)
+                            right = end;
+                    }
+
+                    if (strncmp(segment_command->segname, "__LINKEDIT", 16) == 0) {
+                        size_t size(mach_header.Swap(allocation.limit_ + allocation.alloc_ - mach_header.Swap(segment_command->fileoff)));
+                        segment_command->filesize = size;
+                        segment_command->vmsize = Align(size, 1 << allocation.align_);
+                    }
                 } break;
             }
 
@@ -1437,7 +1507,7 @@ static void Allocate(const void *idata, size_t isize, std::streambuf &output, co
         pad(output, allocation.limit_ - allocation.size_);
         position += allocation.limit_ - allocation.size_;
 
-        size_t saved(save(mach_header, allocation.baton_, output, allocation.limit_, overlap, top, progress));
+        size_t saved(save(mach_header, allocation.baton_, output, allocation.limit_, left, right, overlap, top, progress));
         if (allocation.alloc_ > saved)
             pad(output, allocation.alloc_ - saved);
         else
@@ -1660,11 +1730,6 @@ class NullBuffer :
     virtual int_type overflow(int_type next) {
         return next;
     }
-};
-
-class Digest {
-  public:
-    uint8_t sha1_[LDID_SHA1_DIGEST_LENGTH];
 };
 
 class HashBuffer :
@@ -1960,17 +2025,51 @@ Hash Sign(const void *idata, size_t isize, std::streambuf &output, const std::st
 #endif
 
         return alloc;
-    }), fun([&](const MachHeader &mach_header, const Baton &baton, std::streambuf &output, size_t limit, const std::string &overlap, const char *top, const Progress &progress) -> size_t {
+    }), fun([&](const MachHeader &mach_header, const Baton &baton, std::streambuf &output, size_t limit, size_t left, size_t right, const std::string &overlap, const char *top, const Progress &progress) -> size_t {
         Blobs blobs;
 
         if (true) {
             insert(blobs, CSSLOT_REQUIREMENTS, backing);
         }
 
+        uint64_t execs(0);
+        if (mach_header.Swap(mach_header->filetype) == MH_EXECUTE)
+            execs |= kSecCodeExecSegMainBinary;
+
         if (!baton.entitlements_.empty()) {
             std::stringbuf data;
             put(data, baton.entitlements_.data(), baton.entitlements_.size());
             insert(blobs, CSSLOT_ENTITLEMENTS, CSMAGIC_EMBEDDED_ENTITLEMENTS, data);
+
+#ifndef LDID_NOPLIST
+            auto entitlements(plist(baton.entitlements_));
+            _scope({ plist_free(entitlements); });
+            _assert(plist_get_node_type(entitlements) == PLIST_DICT);
+
+            const auto entitled([&](const char *key) {
+                auto item(plist_dict_get_item(entitlements, key));
+                if (plist_get_node_type(item) != PLIST_BOOLEAN)
+                    return false;
+                uint8_t value(0);
+                plist_get_bool_val(item, &value);
+                return value != 0;
+            });
+
+            if (entitled("get-task-allow"))
+                execs |= kSecCodeExecSegAllowUnsigned;
+            if (entitled("run-unsigned-code"))
+                execs |= kSecCodeExecSegAllowUnsigned;
+            if (entitled("com.apple.private.cs.debugger"))
+                execs |= kSecCodeExecSegDebugger;
+            if (entitled("dynamic-codesigning"))
+                execs |= kSecCodeExecSegJit;
+            if (entitled("com.apple.private.skip-library-validation"))
+                execs |= kSecCodeExecSegSkipLibraryVal;
+            if (entitled("com.apple.private.amfi.can-load-cdhash"))
+                execs |= kSecCodeExecSegCanLoadCdHash;
+            if (entitled("com.apple.private.amfi.can-execute-cdhash"))
+                execs |= kSecCodeExecSegCanExecCdHash;
+#endif
         }
 
         Slots posts(slots);
@@ -2000,7 +2099,7 @@ Hash Sign(const void *idata, size_t isize, std::streambuf &output, const std::st
             directory.version = Swap(uint32_t(0x00020400));
             directory.flags = Swap(uint32_t(flags));
             directory.nSpecialSlots = Swap(special);
-            directory.codeLimit = Swap(uint32_t(limit));
+            directory.codeLimit = Swap(uint32_t(limit > UINT32_MAX ? UINT32_MAX : limit));
             directory.nCodeSlots = Swap(normal);
             directory.hashSize = algorithm.size_;
             directory.hashType = algorithm.type_;
@@ -2009,10 +2108,10 @@ Hash Sign(const void *idata, size_t isize, std::streambuf &output, const std::st
             directory.spare2 = Swap(uint32_t(0));
             directory.scatterOffset = Swap(uint32_t(0));
             directory.spare3 = Swap(uint32_t(0));
-            directory.codeLimit64 = Swap(uint64_t(0));;
-            directory.execSegBase = Swap(uint64_t(0));
-            directory.execSegLimit = Swap(uint64_t(0));
-            directory.execSegFlags = Swap(uint64_t(0));
+            directory.codeLimit64 = Swap(uint64_t(limit > UINT32_MAX ? limit : 0));
+            directory.execSegBase = Swap(uint64_t(left));
+            directory.execSegLimit = Swap(uint64_t(right - left));
+            directory.execSegFlags = Swap(execs);
 
             uint32_t offset(sizeof(Blob) + sizeof(CodeDirectory));
 
@@ -2144,18 +2243,19 @@ Hash Sign(const void *idata, size_t isize, std::streambuf &output, const std::st
 static void Unsign(void *idata, size_t isize, std::streambuf &output, const Progress &progress) {
     Allocate(idata, isize, output, fun([](const MachHeader &mach_header, Baton &baton, size_t size) -> size_t {
         return 0;
-    }), fun([](const MachHeader &mach_header, const Baton &baton, std::streambuf &output, size_t limit, const std::string &overlap, const char *top, const Progress &progress) -> size_t {
+    }), fun([](const MachHeader &mach_header, const Baton &baton, std::streambuf &output, size_t limit, size_t left, size_t right, const std::string &overlap, const char *top, const Progress &progress) -> size_t {
         return 0;
     }), progress);
 }
 
 std::string DiskFolder::Path(const std::string &path) const {
-    return path_ + "/" + path;
+    return path_ + path;
 }
 
 DiskFolder::DiskFolder(const std::string &path) :
     path_(path)
 {
+    _assert_(path_.size() != 0 && path_[path_.size() - 1] == '/', "missing / on %s", path_.c_str());
 }
 
 DiskFolder::~DiskFolder() {
@@ -2249,7 +2349,7 @@ bool DiskFolder::Look(const std::string &path) const {
 void DiskFolder::Open(const std::string &path, const Functor<void (std::streambuf &, size_t, const void *)> &code) const {
     std::filebuf data;
     auto result(data.open(Path(path).c_str(), std::ios::binary | std::ios::in));
-    _assert_(result == &data, "DiskFolder::Open(%s)", path.c_str());
+    _assert_(result == &data, "DiskFolder::Open(%s)", Path(path).c_str());
 
     auto length(data.pubseekoff(0, std::ios::end, std::ios::in));
     data.pubseekpos(0, std::ios::in);
@@ -2265,22 +2365,27 @@ SubFolder::SubFolder(Folder &parent, const std::string &path) :
     parent_(parent),
     path_(path)
 {
+    _assert_(path_.size() == 0 || path_[path_.size() - 1] == '/', "missing / on %s", path_.c_str());
+}
+
+std::string SubFolder::Path(const std::string &path) const {
+    return path_ + path;
 }
 
 void SubFolder::Save(const std::string &path, bool edit, const void *flag, const Functor<void (std::streambuf &)> &code) {
-    return parent_.Save(path_ + path, edit, flag, code);
+    return parent_.Save(Path(path), edit, flag, code);
 }
 
 bool SubFolder::Look(const std::string &path) const {
-    return parent_.Look(path_ + path);
+    return parent_.Look(Path(path));
 }
 
 void SubFolder::Open(const std::string &path, const Functor<void (std::streambuf &, size_t, const void *)> &code) const {
-    return parent_.Open(path_ + path, code);
+    return parent_.Open(Path(path), code);
 }
 
 void SubFolder::Find(const std::string &path, const Functor<void (const std::string &)> &code, const Functor<void (const std::string &, const Functor<std::string ()> &)> &link) const {
-    return parent_.Find(path_ + path, code, link);
+    return parent_.Find(Path(path), code, link);
 }
 
 std::string UnionFolder::Map(const std::string &path) const {
@@ -2492,17 +2597,38 @@ static Hash Sign(const uint8_t *prefix, size_t size, std::streambuf &buffer, Has
     return Sign(data.data(), data.size(), proxy, identifier, entitlements, merge, requirements, key, slots, flags, platform, progress);
 }
 
-Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std::map<std::string, Hash> &remote, const std::string &requirements, const Functor<std::string (const std::string &, const std::string &)> &alter, const Progress &progress) {
+struct State {
+    std::map<std::string, Hash> files;
+    std::map<std::string, std::string> links;
+
+    void Merge(const std::string &root, const State &state) {
+        for (const auto &entry : state.files)
+            files[root + entry.first] = entry.second;
+        for (const auto &entry : state.links)
+            links[root + entry.first] = entry.second;
+    }
+};
+
+Bundle Sign(const std::string &root, Folder &parent, const std::string &key, State &remote, const std::string &requirements, const Functor<std::string (const std::string &, const std::string &)> &alter, const Progress &progress) {
     std::string executable;
     std::string identifier;
 
     bool mac(false);
 
     std::string info("Info.plist");
-    if (!folder.Look(info) && folder.Look("Resources/" + info)) {
+
+    SubFolder folder(parent, [&]() {
+        if (parent.Look(info))
+            return "";
         mac = true;
-        info = "Resources/" + info;
-    }
+        if (false);
+        else if (parent.Look("Contents/" + info))
+            return "Contents/";
+        else if (parent.Look("Resources/" + info)) {
+            info = "Resources/" + info;
+            return "";
+        } else _assert_(false, "cannot find Info.plist");
+    }());
 
     folder.Open(info, fun([&](std::streambuf &buffer, size_t length, const void *flag) {
         plist_d(buffer, length, fun([&](plist_t node) {
@@ -2511,10 +2637,8 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
         }));
     }));
 
-    if (!mac && folder.Look("MacOS/" + executable)) {
+    if (mac && info == "Info.plist")
         executable = "MacOS/" + executable;
-        mac = true;
-    }
 
     progress(root + "*");
 
@@ -2540,30 +2664,31 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
     const std::string resources(mac ? "Resources/" : "");
 
     if (true) {
-        rules1.insert(Rule{1, NoMode, "^" + resources});
+        rules1.insert(Rule{1, NoMode, "^" + (resources == "" ? ".*" : resources)});
         rules1.insert(Rule{1000, OptionalMode, "^" + resources + ".*\\.lproj/"});
         rules1.insert(Rule{1100, OmitMode, "^" + resources + ".*\\.lproj/locversion.plist$"});
-        rules1.insert(Rule{1010, NoMode, "^Base\\.lproj/"});
+        rules1.insert(Rule{1010, NoMode, "^" + resources + "Base\\.lproj/"});
         rules1.insert(Rule{1, NoMode, "^version.plist$"});
     }
 
     if (true) {
         rules2.insert(Rule{11, NoMode, ".*\\.dSYM($|/)"});
-        rules2.insert(Rule{20, NoMode, "^" + resources});
+        if (mac) rules2.insert(Rule{20, NoMode, "^" + resources});
         rules2.insert(Rule{2000, OmitMode, "^(.*/)?\\.DS_Store$"});
-        rules2.insert(Rule{10, NestedMode, "^(Frameworks|SharedFrameworks|PlugIns|Plug-ins|XPCServices|Helpers|MacOS|Library/(Automator|Spotlight|LoginItems))/"});
+        if (mac) rules2.insert(Rule{10, NestedMode, "^(Frameworks|SharedFrameworks|PlugIns|Plug-ins|XPCServices|Helpers|MacOS|Library/(Automator|Spotlight|LoginItems))/"});
         rules2.insert(Rule{1, NoMode, "^.*"});
         rules2.insert(Rule{1000, OptionalMode, "^" + resources + ".*\\.lproj/"});
         rules2.insert(Rule{1100, OmitMode, "^" + resources + ".*\\.lproj/locversion.plist$"});
-        rules2.insert(Rule{1010, NoMode, "^Base\\.lproj/"});
+        if (!mac) rules2.insert(Rule{1010, NoMode, "^Base\\.lproj/"});
         rules2.insert(Rule{20, OmitMode, "^Info\\.plist$"});
         rules2.insert(Rule{20, OmitMode, "^PkgInfo$"});
-        rules2.insert(Rule{10, NestedMode, "^[^/]+$"});
+        if (mac) rules2.insert(Rule{10, NestedMode, "^[^/]+$"});
         rules2.insert(Rule{20, NoMode, "^embedded\\.provisionprofile$"});
+        if (mac) rules2.insert(Rule{1010, NoMode, "^" + resources + "Base\\.lproj/"});
         rules2.insert(Rule{20, NoMode, "^version\\.plist$"});
     }
 
-    std::map<std::string, Hash> local;
+    State local;
 
     std::string failure(mac ? "Contents/|Versions/[^/]*/Resources/" : "");
     Expression nested("^(Frameworks/[^/]*\\.framework|PlugIns/[^/]*\\.appex(()|/[^/]*.app))/(" + failure + ")Info\\.plist$");
@@ -2573,7 +2698,10 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
         if (!nested(name))
             return;
         auto bundle(root + Split(name).dir);
-        bundle.resize(bundle.size() - resources.size());
+        if (mac) {
+            _assert(!bundle.empty());
+            bundle = Split(bundle.substr(0, bundle.size() - 1)).dir;
+        }
         SubFolder subfolder(folder, bundle);
 
         bundles[nested[1]] = Sign(bundle, subfolder, key, local, "", Starts(name, "PlugIns/") ? alter :
@@ -2598,15 +2726,13 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
         return false;
     });
 
-    std::map<std::string, std::string> links;
-
     folder.Find("", fun([&](const std::string &name) {
         if (exclude(name))
             return;
 
-        if (local.find(name) != local.end())
+        if (local.files.find(name) != local.files.end())
             return;
-        auto &hash(local[name]);
+        auto &hash(local.files[name]);
 
         folder.Open(name, fun([&](std::streambuf &data, size_t length, const void *flag) {
             progress(root + name);
@@ -2648,7 +2774,7 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
         if (exclude(name))
             return;
 
-        links[name] = read();
+        local.links[name] = read();
     }));
 
     auto plist(plist_new_dict());
@@ -2663,7 +2789,7 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
 
         bool old(&version.second == &rules1);
 
-        for (const auto &hash : local)
+        for (const auto &hash : local.files)
             for (const auto &rule : version.second)
                 if (rule(hash.first)) {
                     if (!old && mac && excludes.find(hash.first) != excludes.end());
@@ -2682,19 +2808,20 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
                     break;
                 }
 
-        for (const auto &link : links)
-            for (const auto &rule : version.second)
-                if (rule(link.first)) {
-                    if (rule.mode_ != OmitMode) {
-                        auto entry(plist_new_dict());
-                        plist_dict_set_item(entry, "symlink", plist_new_string(link.second.c_str()));
-                        if (rule.mode_ == OptionalMode)
-                            plist_dict_set_item(entry, "optional", plist_new_bool(true));
-                        plist_dict_set_item(files, link.first.c_str(), entry);
-                    }
+        if (!old)
+            for (const auto &link : local.links)
+                for (const auto &rule : version.second)
+                    if (rule(link.first)) {
+                        if (rule.mode_ != OmitMode) {
+                            auto entry(plist_new_dict());
+                            plist_dict_set_item(entry, "symlink", plist_new_string(link.second.c_str()));
+                            if (rule.mode_ == OptionalMode)
+                                plist_dict_set_item(entry, "optional", plist_new_bool(true));
+                            plist_dict_set_item(files, link.first.c_str(), entry);
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
         if (!old && mac)
             for (const auto &bundle : bundles) {
@@ -2745,7 +2872,7 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
     }
 
     folder.Save(signature, true, NULL, fun([&](std::streambuf &save) {
-        HashProxy proxy(local[signature], save);
+        HashProxy proxy(local.files[signature], save);
         char *xml(NULL);
         uint32_t size;
         plist_to_xml(plist, &xml, &size);
@@ -2754,31 +2881,39 @@ Bundle Sign(const std::string &root, Folder &folder, const std::string &key, std
     }));
 
     Bundle bundle;
-    bundle.path = executable;
+    bundle.path = folder.Path(executable);
 
     folder.Open(executable, fun([&](std::streambuf &buffer, size_t length, const void *flag) {
         progress(root + executable);
         folder.Save(executable, true, flag, fun([&](std::streambuf &save) {
             Slots slots;
-            slots[1] = local.at(info);
-            slots[3] = local.at(signature);
-            bundle.hash = Sign(NULL, 0, buffer, local[executable], save, identifier, entitlements, false, requirements, key, slots, length, 0, false, Progression(progress, root + executable));
+            slots[1] = local.files.at(info);
+            slots[3] = local.files.at(signature);
+            bundle.hash = Sign(NULL, 0, buffer, local.files[executable], save, identifier, entitlements, false, requirements, key, slots, length, 0, false, Progression(progress, root + executable));
         }));
     }));
 
-    for (const auto &entry : local)
-        remote[root + entry.first] = entry.second;
-
+    remote.Merge(root, local);
     return bundle;
 }
 
 Bundle Sign(const std::string &root, Folder &folder, const std::string &key, const std::string &requirements, const Functor<std::string (const std::string &, const std::string &)> &alter, const Progress &progress) {
-    std::map<std::string, Hash> local;
+    State local;
     return Sign(root, folder, key, local, requirements, alter, progress);
 }
 #endif
 
 #endif
+}
+
+std::string Hex(const uint8_t *data, size_t size) {
+    std::string hex;
+    hex.reserve(size * 2);
+    for (size_t i(0); i != size; ++i) {
+        hex += "0123456789abcdef"[data[i] >> 4];
+        hex += "0123456789abcdef"[data[i] & 0xf];
+    }
+    return hex;
 }
 
 static void usage(const char *argv0) {
@@ -2790,16 +2925,7 @@ static void usage(const char *argv0) {
     fprintf(stderr, "Other Options\n");
     fprintf(stderr, "   -Kkey.p12     Sign using private key in key.p12\n");
     fprintf(stderr, "   -M            Merge entitlements with any existing\n");
-    fprintf(stderr, "   -d            Print CDHash of file\n");
-}
-
-static void print_hash(char *buf, uint8_t* hash, unsigned int hash_length)
-{
-    int i = 0;
-    char* p = buf;
-    for (i = 0; i < hash_length; i++) {
-        p += sprintf(p, "%02x", hash[i]);
-    }
+    fprintf(stderr, "   -h            Print CDHash of file\n");
 }
 
 #ifndef LDID_NOTOOLS
@@ -2820,6 +2946,7 @@ int main(int argc, char *argv[]) {
     bool flag_q(false);
 
     bool flag_H(false);
+    bool flag_h(false);
 
 #ifndef LDID_NOFLAGT
     bool flag_T(false);
@@ -2828,8 +2955,8 @@ int main(int argc, char *argv[]) {
     bool flag_S(false);
     bool flag_s(false);
 
-    bool flag_d(false);
     bool flag_D(false);
+    bool flag_d(false);
 
     bool flag_A(false);
     bool flag_a(false);
@@ -2911,14 +3038,15 @@ int main(int argc, char *argv[]) {
                 else _assert(false);
             } break;
 
+            case 'h': flag_h = true; break;
+
             case 'Q': {
                 const char *xml = argv[argi] + 2;
                 requirements.open(xml, O_RDONLY, PROT_READ, MAP_PRIVATE);
             } break;
 
-            case 'd': flag_d = true; break;
-
             case 'D': flag_D = true; break;
+            case 'd': flag_d = true; break;
 
             case 'a': flag_a = true; break;
 
@@ -2956,6 +3084,8 @@ int main(int argc, char *argv[]) {
                     flags |= kSecCodeSignatureEnforcement;
                 else if (strcmp(name, "library-validation") == 0)
                     flags |= kSecCodeSignatureLibraryValidation;
+                else if (strcmp(name, "runtime") == 0)
+                    flags |= kSecCodeSignatureRuntime;
                 else _assert(false);
             } break;
 
@@ -3018,6 +3148,11 @@ int main(int argc, char *argv[]) {
     _assert(flag_S || key.empty());
     _assert(flag_S || flag_I == NULL);
 
+    if (flag_d && !flag_h) {
+        flag_h = true;
+        fprintf(stderr, "WARNING: -d also (temporarily) does the behavior of -h for compatibility with a fork of ldid\n");
+    }
+
     if (files.empty())
         return 0;
 
@@ -3029,9 +3164,9 @@ int main(int argc, char *argv[]) {
         _syscall(stat(path.c_str(), &info));
 
         if (S_ISDIR(info.st_mode)) {
+            _assert(flag_S);
 #ifndef LDID_NOPLIST
-            _assert(!flag_r);
-            ldid::DiskFolder folder(path);
+            ldid::DiskFolder folder(path + "/");
             path += "/" + Sign("", folder, key, requirements, ldid::fun([&](const std::string &, const std::string &) -> std::string { return entitlements; }), dummy_).path;
 #else
             _assert(false);
@@ -3118,6 +3253,10 @@ int main(int argc, char *argv[]) {
 #endif
             }
 
+            if (flag_d && encryption != NULL) {
+                printf("cryptid=%d\n", mach_header.Swap(encryption->cryptid));
+            }
+
             if (flag_D) {
                 _assert(encryption != NULL);
                 encryption->cryptid = mach_header.Swap(0);
@@ -3157,65 +3296,6 @@ int main(int argc, char *argv[]) {
                     }
             }
 
-            if (flag_d) {
-                _assert(signature != NULL);
-
-                uint32_t data = mach_header.Swap(signature->dataoff);
-                uint8_t *top = reinterpret_cast<uint8_t *>(mach_header.GetBase());
-                uint8_t *blob = top + data;
-                struct SuperBlob *super = reinterpret_cast<struct SuperBlob *>(blob);
-                bool has_alternate = false;
-                char cdhash_sha1_str[LDID_SHA1_DIGEST_LENGTH*2 + 1] = {0, };
-                char cdhash_sha256_str[LDID_SHA256_DIGEST_LENGTH*2 + 1] = {0, };
-                int max_hash_type = 0;
-                char* cdhash_str = NULL;
-                char hash_choices[64] = {0, };
-
-                for (size_t index(0); index != Swap(super->count); ++index) {
-                    switch (Swap(super->index[index].type)) {
-                        case CSSLOT_ALTERNATE:
-                            has_alternate = true;
-                        case CSSLOT_CODEDIRECTORY:
-                        {
-                            uint32_t begin = Swap(super->index[index].offset);
-                            struct CodeDirectory *directory = reinterpret_cast<struct CodeDirectory *>(blob + begin + sizeof(Blob));
-                            struct Blob *cdblob = reinterpret_cast<struct Blob *>(blob + begin);
-                            if (directory->hashType == 1) {
-                                uint8_t cdhash_sha1[LDID_SHA1_DIGEST_LENGTH];
-                                LDID_SHA1((const unsigned char*)cdblob, Swap(cdblob->length), cdhash_sha1);
-                                print_hash(cdhash_sha1_str, cdhash_sha1, LDID_SHA1_DIGEST_LENGTH);
-                                printf("CandidateCDHash sha1=%s\n", cdhash_sha1_str);
-                                if (*hash_choices) strcat(hash_choices, ",");
-                                strcat(hash_choices, "sha1");
-                                if (1 > max_hash_type) {
-                                    max_hash_type = 1;
-                                    cdhash_str = &cdhash_sha1_str[0];
-                                }
-                            } else if (directory->hashType == 2) {
-                                uint8_t cdhash_sha256[LDID_SHA256_DIGEST_LENGTH];
-                                LDID_SHA256((const unsigned char*)cdblob, Swap(cdblob->length), cdhash_sha256);
-                                print_hash(cdhash_sha256_str, cdhash_sha256, LDID_SHA1_DIGEST_LENGTH);
-                                printf("CandidateCDHash sha256=%s\n", cdhash_sha256_str);
-                                cdhash_sha256_str[LDID_SHA1_DIGEST_LENGTH*2] = '\0';
-                                if (*hash_choices) strcat(hash_choices, ",");
-                                strcat(hash_choices, "sha256");
-                                if (2 > max_hash_type) {
-                                    max_hash_type = 2;
-                                    cdhash_str = &cdhash_sha256_str[0];
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-                if (has_alternate) {
-                    printf("Hash choices=%s\n", hash_choices);
-                }
-                if (cdhash_str) {
-                    printf("CDHash=%s\n", cdhash_str);
-                }
-            }
-
             if (flag_s) {
                 _assert(signature != NULL);
 
@@ -3239,6 +3319,84 @@ int main(int argc, char *argv[]) {
                         if (pages != 0)
                             LDID_SHA1(top + PageSize_ * (pages - 1), ((data - 1) % PageSize_) + 1, hashes[pages - 1]);
                     }
+            }
+
+            if (flag_h) {
+                _assert(signature != NULL);
+
+                auto algorithms(GetAlgorithms());
+
+                uint32_t data = mach_header.Swap(signature->dataoff);
+
+                uint8_t *top = reinterpret_cast<uint8_t *>(mach_header.GetBase());
+                uint8_t *blob = top + data;
+                struct SuperBlob *super = reinterpret_cast<struct SuperBlob *>(blob);
+
+                struct Candidate {
+                    CodeDirectory *directory_;
+                    size_t size_;
+                    Algorithm &algorithm_;
+                    std::string hash_;
+                };
+
+                std::map<uint8_t, Candidate> candidates;
+
+                for (size_t index(0); index != Swap(super->count); ++index) {
+                    auto type(Swap(super->index[index].type));
+                    if ((type == CSSLOT_CODEDIRECTORY || type >= CSSLOT_ALTERNATE) && type != CSSLOT_SIGNATURESLOT) {
+                        uint32_t begin = Swap(super->index[index].offset);
+                        uint32_t end = index + 1 == Swap(super->count) ? Swap(super->blob.length) : Swap(super->index[index + 1].offset);
+                        struct CodeDirectory *directory = reinterpret_cast<struct CodeDirectory *>(blob + begin + sizeof(Blob));
+                        auto type(directory->hashType);
+                        _assert(type > 0 && type <= algorithms.size());
+                        auto &algorithm(*algorithms[type - 1]);
+                        uint8_t hash[algorithm.size_];
+                        algorithm(hash, blob + begin, end - begin);
+                        candidates.insert({type, {directory, end - begin, algorithm, Hex(hash, 20)}});
+                    }
+                }
+
+                _assert(!candidates.empty());
+                auto best(candidates.end());
+                --best;
+
+                const auto directory(best->second.directory_);
+                const auto flags(Swap(directory->flags));
+
+                std::string names;
+                if (flags & kSecCodeSignatureHost)
+                    names += ",host";
+                if (flags & kSecCodeSignatureAdhoc)
+                    names += ",adhoc";
+                if (flags & kSecCodeSignatureForceHard)
+                    names += ",hard";
+                if (flags & kSecCodeSignatureForceKill)
+                    names += ",kill";
+                if (flags & kSecCodeSignatureForceExpiration)
+                    names += ",expires";
+                if (flags & kSecCodeSignatureRestrict)
+                    names += ",restrict";
+                if (flags & kSecCodeSignatureEnforcement)
+                    names += ",enforcement";
+                if (flags & kSecCodeSignatureLibraryValidation)
+                    names += ",library-validation";
+                if (flags & kSecCodeSignatureRuntime)
+                    names += ",runtime";
+
+                printf("CodeDirectory v=%x size=%zd flags=0x%x(%s) hashes=%d+%d location=embedded\n",
+                    Swap(directory->version), best->second.size_, flags, names.empty() ? "none" : names.c_str() + 1, Swap(directory->nCodeSlots), Swap(directory->nSpecialSlots));
+                printf("Hash type=%s size=%d\n", best->second.algorithm_.name(), directory->hashSize);
+
+                std::string choices;
+                for (const auto &candidate : candidates) {
+                    auto choice(candidate.second.algorithm_.name());
+                    choices += ',';
+                    choices += choice;
+                    printf("CandidateCDHash %s=%s\n", choice, candidate.second.hash_.c_str());
+                }
+                printf("Hash choices=%s\n", choices.c_str() + 1);
+
+                printf("CDHash=%s\n", best->second.hash_.c_str());
             }
         }
 
