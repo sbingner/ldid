@@ -1,15 +1,14 @@
 DESTDIR ?= /
 PREFIX  ?= /usr/local
-OPENSSL_LDFLAGS := $(shell pkg-config --libs-only-L openssl)
-OPENSSL_CFLAGS  := $(shell pkg-config --cflags openssl)
-PLIST_LDFLAGS := $(shell pkg-config --libs libplist)
-PLIST_CFLAGS  := $(shell pkg-config --cflags libplist)
-CFLAGS += $(OPENSSL_CFLAGS) $(PLIST_CFLAGS) -O2
-LDFLAGS ?= $(LDID_LIBS) $(OPENSSL_LDFLAGS) $(PLIST_LDFLAGS)
+OPENSSL_LDFLAGS := $(shell pkg-config --libs libcrypto)
+OPENSSL_CFLAGS  := $(shell pkg-config --cflags libcrypto)
+PLIST_LDFLAGS   := $(shell pkg-config --libs libplist)
+PLIST_CFLAGS    := $(shell pkg-config --cflags libplist)
+CFLAGS          := $(OPENSSL_CFLAGS) $(PLIST_CFLAGS) -O2
+LDFLAGS         := $(OPENSSL_LDFLAGS) $(PLIST_LDFLAGS)
 
 .PHONY: all clean
 LDID_OBJS = ldid.cpp.o lookup2.c.o
-LDID_LIBS = -lcrypto
 
 all: ldid
 
