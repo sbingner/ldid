@@ -2917,6 +2917,7 @@ std::string Hex(const uint8_t *data, size_t size) {
 }
 
 static void usage(const char *argv0) {
+    fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION);
     fprintf(stderr, "usage: %s -S[entitlements.xml] <binary>\n", argv0);
     fprintf(stderr, "   %s -e MobileSafari\n", argv0);
     fprintf(stderr, "   %s -S cat\n", argv0);

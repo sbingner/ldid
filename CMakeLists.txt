@@ -21,7 +21,29 @@ else()
     set(LDID_LIBS ${PLIST_LIBRARIES} ${CRYPTO_LIBRARIES})
 endif()
 
+find_package(Git)
+if (!Git_FOUND)
+    message(FATAL_ERROR "Git not found!")
+endif()
+
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" describe --tags --match=v*
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMAND_ERROR_IS_FATAL ANY
+    ERROR_QUIET
+    RESULT_VARIABLE res
+    OUTPUT_VARIABLE LDID_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+string(REGEX REPLACE "-([^-]*)-([^-]*)$" "+\\1.\\2" LDID_VERSION ${LDID_VERSION})
+string(REGEX REPLACE "^v" "" LDID_VERSION ${LDID_VERSION})
+string(REGEX REPLACE "%" "~" LDID_VERSION ${LDID_VERSION})
+
 add_executable(ldid ldid.cpp lookup2.c)
+
+set_property(SOURCE ldid.cpp APPEND
+    PROPERTY COMPILE_DEFINITIONS LDID_VERSION=\"${LDID_VERSION}\"
+)
 
 target_link_libraries(ldid
     PUBLIC
@@ -39,6 +61,5 @@ target_link_directories(ldid
     ${PLIST_LIBRARY_DIRS}
     ${CRYPTO_LIBRARY_DIRS}
 )
-
 
 install(TARGETS ldid DESTINATION bin)
