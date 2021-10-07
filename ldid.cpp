@@ -143,7 +143,7 @@
     __attribute__((packed))
 
 #ifndef LDID_NOSMIME
-std::string password = "";
+std::string password;
 #endif
 
 template <typename Type_>
@@ -1790,7 +1790,7 @@ class Stuff {
     {
         _assert(value_ != NULL);
 
-        if (!PKCS12_verify_mac(value_, NULL, 0) && password == "") {
+        if (!PKCS12_verify_mac(value_, NULL, 0) && password.empty()) {
             char passbuf[2048];
             UI_UTIL_read_pw_string(passbuf, 2048, "Enter password: ", 0);
             password = passbuf;
