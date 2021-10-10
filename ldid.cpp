@@ -3090,10 +3090,11 @@ std::string Hex(const uint8_t *data, size_t size) {
 
 static void usage(const char *argv0) {
     fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION);
-    fprintf(stderr, "usage: %s [-aDdehMPqu] [-Acputype:subtype]\n", argv0);
-    fprintf(stderr, "          [-C[adhoc | enforcement | expires |\n");
-    fprintf(stderr, "          hard | host | kill | library-validation | restrict | runtime]]\n");
-    fprintf(stderr, "          [-Kkey.p12] [-r | -Sfile | -s] file ...\n");
+    fprintf(stderr, "usage: %s [-Acputype:subtype] [-a]\n", argv0);
+    fprintf(stderr, "          [-C[adhoc | enforcement | expires | hard |\n");
+    fprintf(stderr, "          host | kill | library-validation | restrict | runtime]] [-D] [-d]\n");
+    fprintf(stderr, "          [-e] [-h] [-Kkey.p12] [-M] [-P] [-q] [-r | -Sfile | -s]\n");
+    fprintf(stderr, "          [-Ttimestamp] [-u] file ...\n");
 }
 
 #ifndef LDID_NOTOOLS
