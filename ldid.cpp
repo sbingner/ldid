@@ -3096,7 +3096,7 @@ static void usage(const char *argv0) {
     fprintf(stderr, "          [-e] [-h] [-Kkey.p12] [-M] [-P] [-q] [-r | -Sfile | -s]\n");
     fprintf(stderr, "          [-Ttimestamp] [-u] file ...\n");
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "   -S[file]      Pseudo sign using the entitlements in file\n");
+    fprintf(stderr, "   -S[file.xml]  Pseudo-sign using the entitlements in file\n");
     fprintf(stderr, "   -Kkey.p12     Sign using private key in key.p12\n");
     fprintf(stderr, "   -M            Merge entitlements with any existing\n");
     fprintf(stderr, "   -h            Print CDHash of file\n\n");
