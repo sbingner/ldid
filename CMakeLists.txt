@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 11)
 project(ldid)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(PLIST REQUIRED libplist)
+pkg_check_modules(PLIST REQUIRED libplist-2.0)
 pkg_check_modules(CRYPTO REQUIRED libcrypto)
 
 if(LDID_STATIC)
