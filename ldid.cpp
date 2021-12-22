@@ -2644,10 +2644,7 @@ static plist_t plist(const std::string &data) {
     if (data.empty())
         return plist_new_dict();
     plist_t plist(NULL);
-    if (Starts(data, "bplist00"))
-        plist_from_bin(data.data(), data.size(), &plist);
-    else
-        plist_from_xml(data.data(), data.size(), &plist);
+    plist_from_memory(data.data(), data.size(), &plist);
     _assert(plist != NULL);
     return plist;
 }
