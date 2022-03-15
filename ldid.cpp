@@ -3090,15 +3090,17 @@ std::string Hex(const uint8_t *data, size_t size) {
 
 static void usage(const char *argv0) {
     fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION);
-    fprintf(stderr, "usage: %s -S[entitlements.xml] <binary>\n", argv0);
-    fprintf(stderr, "   %s -e MobileSafari\n", argv0);
-    fprintf(stderr, "   %s -S cat\n", argv0);
-    fprintf(stderr, "   %s -Stfp.xml gdb\n", argv0);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Other Options\n");
+    fprintf(stderr, "usage: %s [-Acputype:subtype] [-a]\n", argv0);
+    fprintf(stderr, "          [-C[adhoc | enforcement | expires | hard |\n");
+    fprintf(stderr, "          host | kill | library-validation | restrict | runtime]] [-D] [-d]\n");
+    fprintf(stderr, "          [-e] [-h] [-Kkey.p12] [-M] [-P] [-q] [-r | -Sfile | -s]\n");
+    fprintf(stderr, "          [-Ttimestamp] [-u] file ...\n");
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "   -S[file.xml]  Pseudo-sign using the entitlements in file\n");
     fprintf(stderr, "   -Kkey.p12     Sign using private key in key.p12\n");
     fprintf(stderr, "   -M            Merge entitlements with any existing\n");
-    fprintf(stderr, "   -h            Print CDHash of file\n");
+    fprintf(stderr, "   -h            Print CDHash of file\n\n");
+    fprintf(stderr, "More information: 'man ldid'\n");
 }
 
 #ifndef LDID_NOTOOLS
