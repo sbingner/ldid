@@ -2008,7 +2008,7 @@ static void Commit(const std::string &path, const std::string &temp) {
 namespace ldid {
 
 #ifndef LDID_NOSMIME
-static void get(std::string &value, X509_NAME *name, int nid) {
+static void get(std::string &value, const X509_NAME *name, int nid) {
     auto index(X509_NAME_get_index_by_NID(name, nid, -1));
     _assert(index >= 0);
     auto next(X509_NAME_get_index_by_NID(name, nid, index));
@@ -2017,7 +2017,7 @@ static void get(std::string &value, X509_NAME *name, int nid) {
     _assert(entry != NULL);
     auto asn(X509_NAME_ENTRY_get_data(entry));
     _assert(asn != NULL);
-    value.assign(reinterpret_cast<char *>(ASN1_STRING_data(asn)), ASN1_STRING_length(asn));
+    value.assign(reinterpret_cast<const char *>(ASN1_STRING_get0_data(asn)), ASN1_STRING_length(asn));
 }
 #endif
 
